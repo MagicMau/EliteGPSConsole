@@ -30,7 +30,24 @@ namespace WindowsOCRTest
             return Task.Run(async () =>
             {
                 // load the screenshot into memory
-                var bmp = AForge.Imaging.Image.FromFile(path);
+                Bitmap bmp = null;
+                bool isSuccess = false;
+                while (!isSuccess)
+                {
+                    try
+                    {
+                        if (!System.IO.File.Exists(path))
+                            return bmp;
+
+                        bmp = AForge.Imaging.Image.FromFile(path);
+                        isSuccess = true;
+                    }
+                    catch (System.IO.IOException e)
+                    {
+                        System.Diagnostics.Trace.WriteLine($"Exception accessing screenshot: {e.Message}");
+                        System.Threading.Thread.Sleep(500);
+                    }
+                }
 
                 Bitmap coordsBmp = null;
 

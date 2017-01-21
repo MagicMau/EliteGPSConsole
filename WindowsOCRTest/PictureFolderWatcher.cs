@@ -110,7 +110,23 @@ namespace WindowsOCRTest
                         {
                             // recognition failed, move picture to failed path
                             string fileName = System.IO.Path.GetFileName(path);
-                            File.Move(path, System.IO.Path.Combine(failedPath, fileName));
+                            string ext = System.IO.Path.GetExtension(path);
+                            string destPath = System.IO.Path.Combine(failedPath, DateTime.Now.ToString("yyyyMMddHHmmssSSS") + ext);
+
+                            bool isSuccess = false;
+                            while (!isSuccess)
+                            {
+                                try
+                                {
+                                    File.Move(path, destPath);
+                                    isSuccess = true;
+                                }
+                                catch (Exception e)
+                                {
+                                    System.Diagnostics.Trace.WriteLine($"Exception moving {e.Message}");
+                                    Thread.Sleep(500);
+                                }
+                            }
                         }
                         else
                         {
