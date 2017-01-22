@@ -14,8 +14,6 @@ namespace WindowsOCRTest
         private readonly OcrEngine ocrEngine;
         private readonly ImageProcessor imageProcessor;
 
-        private Dictionary<int, OcrResult> rotations = new Dictionary<int, OcrResult>();
-
         public CoordinateRecognizer()
         {
             ocrEngine = OcrEngine.TryCreateFromLanguage(new Windows.Globalization.Language("en"));
@@ -40,10 +38,16 @@ namespace WindowsOCRTest
                     return null;
                 }
 
+                var lines = imageProcessor.ExtractLines(bmp, path);
+                if (lines.Length != 2)
+                {
+                    System.Diagnostics.Trace.WriteLine($"Found {lines.Length} lines, that's not right");
+                    return null;
+                }
+
                 // then, use OCR to extract the coordinates
-                var firstResult = await RecognizeText(bmp);
-                double? latitude = await ProcessLine(firstResult, bmp, 0, path);
-                double? longitude = await ProcessLine(firstResult, bmp, 1, path);
+                double? latitude = await ProcessLine(lines[0], path);
+                double? longitude = await ProcessLine(lines[1], path);
 
                 if (latitude.HasValue && longitude.HasValue)
                     return new Coordinates { Latitude = latitude.Value, Longitude = longitude.Value };
@@ -58,45 +62,48 @@ namespace WindowsOCRTest
             return null;
         }
 
-        private async Task<double?> ProcessLine(OcrResult ocrResult, Bitmap bmp, int lineNr, string path)
+        private async Task<double?> ProcessLine(Bitmap bmp, string path)
         {
-            // first see if we can find it on the first try
-            double? value = await RecognizeLine(ocrResult, lineNr);
+            int bestDigitCount = 0;
+            double? bestGuess = null;
 
-            if (value == null)
+            for (int attempt = 5; attempt > -6; attempt--)
             {
-                double textAngle = ocrResult.TextAngle ?? 0;
-
-                if (textAngle == 0)
-                    textAngle = 0.5;
-
-                for (int attempt = 2; value == null && attempt > -2; attempt--)
-                {
-                    // try rotating it a bit
-                    OcrResult rotatedResult;
-                    if (!rotations.TryGetValue(attempt, out rotatedResult))
-                    {
-                        var rotatedBmp = await imageProcessor.RotateBitmap(bmp, attempt * textAngle);
+                // try rotating it a bit
+                var rotatedBmp = await imageProcessor.RotateBitmap(bmp, attempt);
 #if DEBUG_PICS
-                    try
-                    {
-                        rotatedBmp.Save(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(path), $"rotated_{attempt}.png"));
-                    }
-                    catch { }
+                try
+                {
+                    rotatedBmp.Save(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(path), $"rotated_{attempt}.png"));
+                }
+                catch { }
 #endif
 
-                        rotatedResult = await RecognizeText(rotatedBmp);
-                        rotations[attempt] = rotatedResult;
-                    }
+                var rotatedResult = await RecognizeText(rotatedBmp);
+                // count the number of digits recognized
+                int digitCount = CountDigits(rotatedResult.Text);
+                double? guess = await RecognizeLine(rotatedResult);
+                if (digitCount >= bestDigitCount && guess.HasValue)
+                {
+                    if (bestDigitCount == digitCount && bestGuess < 0 && guess > 0)
+                        continue; // prefer a negative match
 
-                    value = await RecognizeLine(rotatedResult, lineNr);
-
-                    if (value != null)
-                        System.Diagnostics.Trace.WriteLine($"Found with attempt {attempt}");
+                    bestGuess = guess;
+                    bestDigitCount = digitCount;
+                    System.Diagnostics.Trace.WriteLine($"New best guess at attempt {attempt} with {digitCount} digits: {guess}");
                 }
+
+                //if (thisDigitCount > 3 && guess.HasValue)
+                //    return guess; // 4 or more digits? we've got a winner!
             }
 
-            return value;
+            return bestGuess;
+        }
+
+        private int CountDigits(string input)
+        {
+            input = System.Text.RegularExpressions.Regex.Replace(input, @"[^0-9\-Øø]", string.Empty);
+            return input.Length;
         }
         
         private async Task<OcrResult> RecognizeText(Bitmap bitmap)
@@ -105,21 +112,24 @@ namespace WindowsOCRTest
             return await ocrEngine.RecognizeAsync(sbmp);
         }
 
-        private Task<double?> RecognizeLine(OcrResult result, int lineNr)
+        private Task<double?> RecognizeLine(OcrResult result)
         {
             return Task.Run(() =>
             {
-                if (lineNr >= result.Lines.Count)
-                    return default(double?);
+                System.Diagnostics.Trace.WriteLine($"Found: {result.Text}");
 
-                OcrLine line = result.Lines[lineNr];
-
-                string text = line.Text
+                string text = result.Text
                     .Replace(',', '.')
                     .Replace('s', '5')
                     .Replace('S', '5')
+                    .Replace('e', '8')
                     .Replace('B', '8')
+                    .Replace('Ø', '0')
+                    .Replace('€', '6')
+                    .Replace('ø', '0')
                     .Replace('~', '-')
+                    .Replace('—', '-')
+                    .Replace('_', '-')
                     .Replace(" ", string.Empty);
                 text = System.Text.RegularExpressions.Regex.Replace(text, @"[^0-9\.\-]", "0");
 
@@ -129,7 +139,10 @@ namespace WindowsOCRTest
 
                 double value;
                 if (double.TryParse(text, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out value))
-                    return value;
+                {
+                    long l = (long)(value * 10000);
+                    return l / 10000.0; // only keep 4 digits
+                }
 
                 return default(double?);
             });
