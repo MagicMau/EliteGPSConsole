@@ -5,6 +5,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 using Windows.Media.Ocr;
@@ -13,7 +14,7 @@ namespace WindowsOCRTest
 {
     public class ImageProcessor
     {
-        private Color orange = Color.FromArgb(255, 245, 100, 10);
+        private Color orange = Color.FromArgb(255, 197, 80, 0);
 
         private static System.Drawing.Imaging.ColorMatrix greenColorMatrix = new System.Drawing.Imaging.ColorMatrix(
             new float[][]
@@ -35,7 +36,7 @@ namespace WindowsOCRTest
                 new float[] {0, 0, 0, 0, 1}
             });
 
-        private System.Drawing.Imaging.ColorMatrix colorMatrix = noColorMatrix;
+        private System.Drawing.Imaging.ColorMatrix colorMatrix = greenColorMatrix;
 
         public Bitmap MakeBinary(Bitmap bitmap, int threshold)
         {
@@ -74,13 +75,9 @@ namespace WindowsOCRTest
                 Bitmap coordsBmp = null;
 
                 // find the altimeter blob in the shot
-                var blob = FindAltimeterBlob(bmp, 0x80, path);
-
-                if (blob == null)
-                    blob = FindAltimeterBlob(bmp, 0x70, path);
-
-                if (blob == null)
-                    blob = FindAltimeterBlob(bmp, 0x60, path);
+                Blob blob = null;
+                for (int threshold = 0x90; blob == null && threshold >= 0x60; threshold -= 0x10)
+                    blob = FindAltimeterBlob(bmp, threshold, path);
 
                 if (blob != null)
                 {
@@ -148,7 +145,7 @@ namespace WindowsOCRTest
 #if DEBUG_PICS
                     try
                     {
-                    borderedBmp.Save(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(path), "coords_orig.png"));
+                        borderedBmp.Save(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(path), "coords_orig.png"));
                     }
                     catch { }
 #endif
@@ -178,23 +175,27 @@ namespace WindowsOCRTest
                 catch { }
 #endif
 
+                var hslFilter = new HSLFiltering();
+                var color = GetTransformedColor(orange, colorMatrix);
+                int hue = (int)color.GetHue();
+                hslFilter.Hue = new AForge.IntRange(Math.Max(0, hue - 25), Math.Min(359, hue + 5));
+                hslFilter.Saturation = new AForge.Range(Math.Max(0, color.GetSaturation() - 0.4f), Math.Min(1, color.GetSaturation() + 0.4f));
+                hslFilter.Luminance = new AForge.Range(Math.Max(0, color.GetBrightness() - 0.4f), Math.Min(1, color.GetBrightness() + 0.2f));
 
-                var colorFilter = new ColorFiltering();
-                colorFilter.Red = new AForge.IntRange(minColor.R, maxColor.R);
-                colorFilter.Green = new AForge.IntRange(minColor.G, maxColor.G);
-                colorFilter.Blue = new AForge.IntRange(minColor.B, maxColor.B);
+                //var colorFilter = new ColorFiltering();
+                //colorFilter.Red = new AForge.IntRange(minColor.R, maxColor.R);
+                //colorFilter.Green = new AForge.IntRange(minColor.G, maxColor.G);
+                //colorFilter.Blue = new AForge.IntRange(minColor.B, maxColor.B);
 
-                var filter = new FiltersSequence(new IFilter[]
-                {
-                new ResizeBicubic(borderedBmp.Width * 12, borderedBmp.Height * 12),
-                colorFilter
-                });
+                var resizeFilter = new ResizeBicubic(borderedBmp.Width * 12, borderedBmp.Height * 12);
 
+                var filter = new FiltersSequence(new IFilter[] { resizeFilter, hslFilter });
                 bitmap = filter.Apply(borderedBmp);
 
 #if DEBUG_PICS
                 try
                 {
+                    resizeFilter.Apply(borderedBmp).Save(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(path), "coords_resized.png"));
                     bitmap.Save(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(path), "coords_filtered.png"));
                 }
                 catch { }
@@ -306,19 +307,19 @@ namespace WindowsOCRTest
             Color minColor = Color.FromArgb(255, minRed, minGreen, minBlue);
             Color maxColor = Color.FromArgb(255, maxRed, maxGreen, maxBlue);
 
-            var minHue = Math.Min(color.GetHue(), Math.Min(minColor.GetHue(), maxColor.GetHue()));
-            var maxHue = Math.Max(color.GetHue(), Math.Max(minColor.GetHue(), maxColor.GetHue()));
+            var minHue = (int)((Math.Max(0, color.GetHue() - 10) / 360f) * 240f);
+            var maxHue = (int)((Math.Min(359, color.GetHue() + 10) / 360f) * 240f);
 
-            var minSaturation = Math.Min(color.GetSaturation(), Math.Min(minColor.GetSaturation(), maxColor.GetSaturation()));
-            var maxSaturation = Math.Max(color.GetSaturation(), Math.Max(minColor.GetSaturation(), maxColor.GetSaturation()));
+            var minSaturation = (int)(Math.Max(0f, color.GetSaturation() - 0.3f) * 240f);
+            var maxSaturation = (int)(Math.Min(1f, color.GetSaturation() + 0.3f) * 240f);
 
-            var minBrightness = Math.Min(color.GetBrightness(), Math.Min(minColor.GetBrightness(), maxColor.GetBrightness()));
-            var maxBrightness = Math.Max(color.GetBrightness(), Math.Max(minColor.GetBrightness(), maxColor.GetBrightness()));
+            var minBrightness = (int)(Math.Max(0f, color.GetBrightness() - 0.2f) * 240f);
+            var maxBrightness = (int)(Math.Min(1f, color.GetBrightness() + 0.2f) * 240f);
 
             return new Color[]
             {
-                FromAhsb(255, minHue, minSaturation, minBrightness),
-                FromAhsb(255, maxHue, maxSaturation, maxBrightness),
+                HLSToColor(minHue, minBrightness, minSaturation),
+                HLSToColor(maxHue, maxBrightness, maxSaturation)
             };
         }
 
@@ -353,115 +354,6 @@ namespace WindowsOCRTest
             return new AForge.IntRange(min, color);
         }
 
-
-        /// http://stackoverflow.com/a/4106615/3131828
-        /// <summary>
-        /// Creates a Color from alpha, hue, saturation and brightness.
-        /// </summary>
-        /// <param name="alpha">The alpha channel value.</param>
-        /// <param name="hue">The hue value.</param>
-        /// <param name="saturation">The saturation value.</param>
-        /// <param name="brightness">The brightness value.</param>
-        /// <returns>A Color with the given values.</returns>
-        public static Color FromAhsb(int alpha, float hue, float saturation, float brightness)
-        {
-            if (0 > alpha
-                || 255 < alpha)
-            {
-                throw new ArgumentOutOfRangeException(
-                    "alpha",
-                    alpha,
-                    "Value must be within a range of 0 - 255.");
-            }
-
-            if (0f > hue
-                || 360f < hue)
-            {
-                throw new ArgumentOutOfRangeException(
-                    "hue",
-                    hue,
-                    "Value must be within a range of 0 - 360.");
-            }
-
-            if (0f > saturation
-                || 1f < saturation)
-            {
-                throw new ArgumentOutOfRangeException(
-                    "saturation",
-                    saturation,
-                    "Value must be within a range of 0 - 1.");
-            }
-
-            if (0f > brightness
-                || 1f < brightness)
-            {
-                throw new ArgumentOutOfRangeException(
-                    "brightness",
-                    brightness,
-                    "Value must be within a range of 0 - 1.");
-            }
-
-            if (0 == saturation)
-            {
-                return Color.FromArgb(
-                                    alpha,
-                                    Convert.ToInt32(brightness * 255),
-                                    Convert.ToInt32(brightness * 255),
-                                    Convert.ToInt32(brightness * 255));
-            }
-
-            float fMax, fMid, fMin;
-            int iSextant, iMax, iMid, iMin;
-
-            if (0.5 < brightness)
-            {
-                fMax = brightness - (brightness * saturation) + saturation;
-                fMin = brightness + (brightness * saturation) - saturation;
-            }
-            else
-            {
-                fMax = brightness + (brightness * saturation);
-                fMin = brightness - (brightness * saturation);
-            }
-
-            iSextant = (int)Math.Floor(hue / 60f);
-            if (300f <= hue)
-            {
-                hue -= 360f;
-            }
-
-            hue /= 60f;
-            hue -= 2f * (float)Math.Floor(((iSextant + 1f) % 6f) / 2f);
-            if (0 == iSextant % 2)
-            {
-                fMid = (hue * (fMax - fMin)) + fMin;
-            }
-            else
-            {
-                fMid = fMin - (hue * (fMax - fMin));
-            }
-
-            iMax = Convert.ToInt32(fMax * 255);
-            iMid = Convert.ToInt32(fMid * 255);
-            iMin = Convert.ToInt32(fMin * 255);
-
-            switch (iSextant)
-            {
-                case 1:
-                    return Color.FromArgb(alpha, iMid, iMax, iMin);
-                case 2:
-                    return Color.FromArgb(alpha, iMin, iMax, iMid);
-                case 3:
-                    return Color.FromArgb(alpha, iMin, iMid, iMax);
-                case 4:
-                    return Color.FromArgb(alpha, iMid, iMin, iMax);
-                case 5:
-                    return Color.FromArgb(alpha, iMax, iMin, iMid);
-                default:
-                    return Color.FromArgb(alpha, iMax, iMid, iMin);
-            }
-        }
-
         /// <summary>
         /// Use the BlobCounter to extract lines from the bitmap
         /// </summary>
@@ -491,30 +383,38 @@ namespace WindowsOCRTest
                 return new Bitmap[0];
             }
 
-            List<Rectangle> lines = new List<Rectangle>();
+            List<Tuple<Rectangle, List<Blob>>> lines = new List<Tuple<Rectangle, List<Blob>>>();
 
+            List<Blob> line = new List<Blob>();
             Rectangle rect = blobs[0].Rectangle;
+            int highestBlobThisLine = 0;
 
             foreach (var blob in blobs)
             {
-                if (blob.Rectangle.Top > (rect.Top + rect.Height))
+                if (blob.Rectangle.Top > (rect.Top + highestBlobThisLine))
                 {
                     // we started a new line apparently
                     if (rect.Width > 600 && rect.Height > 100)
-                        lines.Add(rect);
+                        lines.Add(Tuple.Create(rect, line));
 
                     rect = blob.Rectangle;
+                    line = new List<Blob>();
+                    highestBlobThisLine = blob.Rectangle.Height;
+                    line.Add(blob);
                 }
                 else
                 {
                     // still on the same line, update our rectangle accordingly to make it a bounding box
                     int curRight = rect.Right;
                     int curBottom = rect.Bottom;
+                    highestBlobThisLine = Math.Max(highestBlobThisLine, blob.Rectangle.Height);
 
                     rect.X = Math.Min(rect.X, blob.Rectangle.X);
                     //rect.Y = Math.Min(rect.Y, blob.Rectangle.Y); Y never changes due to sort order ;)
                     rect.Width = Math.Max(curRight, blob.Rectangle.Right) - rect.X;
                     rect.Height = Math.Max(curBottom, blob.Rectangle.Bottom) - rect.Y;
+
+                    line.Add(blob);
                 }
             }
 
@@ -523,11 +423,22 @@ namespace WindowsOCRTest
             Bitmap[] linesBmps = new Bitmap[lines.Count];
 
             int lineNr = 0;
-            foreach (var lineRect in lines)
+            foreach (var tuple in lines)
             {
+                var lineRect = tuple.Item1;
+                var lineBlobs = tuple.Item2;
+
                 var bitmap = new Bitmap(lineRect.Width + 100, lineRect.Height + 100, input.PixelFormat);
+
                 using (var g = Graphics.FromImage(bitmap))
-                    g.DrawImage(input, 50f, 50f, lineRect, GraphicsUnit.Pixel);
+                {
+                    foreach (var blob in lineBlobs)
+                    {
+                        float x = blob.Rectangle.X - lineRect.X + 50f;
+                        float y = blob.Rectangle.Y - lineRect.Y + 50f;
+                        g.DrawImage(input, x, y, blob.Rectangle, GraphicsUnit.Pixel);
+                    }
+                }
 
                 //bitmap = MakeBinary(bitmap, 0x10);
 
@@ -574,5 +485,18 @@ namespace WindowsOCRTest
             return transformedColor;
         }
 
+        [DllImport("shlwapi.dll")]
+        static extern int ColorHLSToRGB(int H, int L, int S);
+
+        static public System.Drawing.Color HLSToColor(int H, int L, int S)
+        {
+            //
+            // Convert Hue, Luminance, and Saturation values to System.Drawing.Color structure.
+            // H, L, and S are in the range of 0-240.
+            // ColorHLSToRGB returns a Win32 RGB value (0x00BBGGRR).  To convert to System.Drawing.Color
+            // structure, use ColorTranslator.FromWin32.
+            //
+            return ColorTranslator.FromWin32(ColorHLSToRGB(H, L, S));
+        }
     }
 }

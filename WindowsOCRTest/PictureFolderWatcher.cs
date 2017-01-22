@@ -111,7 +111,7 @@ namespace WindowsOCRTest
                             // recognition failed, move picture to failed path
                             string fileName = System.IO.Path.GetFileName(path);
                             string ext = System.IO.Path.GetExtension(path);
-                            string destPath = System.IO.Path.Combine(failedPath, DateTime.Now.ToString("yyyyMMddHHmmssSSS") + ext);
+                            string destPath = System.IO.Path.Combine(failedPath, DateTime.Now.ToString("yyyyMMddHHmmssfff") + ext);
 
                             bool isSuccess = false;
                             while (!isSuccess)

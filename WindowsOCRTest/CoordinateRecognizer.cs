@@ -39,7 +39,7 @@ namespace WindowsOCRTest
                 }
 
                 var lines = imageProcessor.ExtractLines(bmp, path);
-                if (lines.Length != 2)
+                if (lines.Length < 2 || lines.Length > 3)
                 {
                     System.Diagnostics.Trace.WriteLine($"Found {lines.Length} lines, that's not right");
                     return null;

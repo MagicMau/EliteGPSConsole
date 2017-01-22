@@ -8,7 +8,7 @@ namespace WindowsOCRTest
     {
         static void Main(string[] args)
         {
-            string file = @"C:\Users\MElbers\OneDrive\Elite\App\Test1\20170121121957SSS.bmp";
+            string file = @"C:\Users\MElbers\OneDrive\Elite\App\Failure\20170122103120838.bmp";
 
             if (file == null)
             {
